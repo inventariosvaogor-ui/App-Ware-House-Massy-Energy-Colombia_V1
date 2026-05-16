@@ -2459,13 +2459,20 @@ async function doDispSend(){
     finishDispSend(m,0);return;
   }
 
+  // Convierte dataURL a Blob sin fetch (evita CSP en Vercel)
+  function d2b(dataUrl){
+    const p=dataUrl.split(','),mime=p[0].match(/:(.*?);/)[1],raw=atob(p[1]),arr=new Uint8Array(raw.length);
+    for(let i=0;i<raw.length;i++)arr[i]=raw.charCodeAt(i);
+    return new Blob([arr],{type:mime});
+  }
+
   // Enviar TODAS las fotos juntas con el mensaje completo
   const fullMsg=window._pendingMsg||buildDispMsg(m);
   const allFiles=[];
   for(const {item,idx,files} of itemsConFotos){
     for(const dataUrl of files){
       try{
-        const res=await fetch(dataUrl);const blob=await res.blob();
+        const blob=d2b(dataUrl);
         const vals=Object.assign({},dispHeaderVals||{},item.vals||{});
         const fname=buildFileName(m,allFiles.length,idx,vals).split('/').pop();
         allFiles.push(new File([blob],fname,{type:'image/jpeg'}));
@@ -2842,17 +2849,27 @@ async function doSend(){
   const totalFotos=todasFotos.length;
   const canShareFiles=!!(navigator.share&&navigator.canShare);
 
-  // ── Función para compartir solo fotos (sin texto) ──
+  // Convierte dataURL a Blob sin fetch (evita bloqueo CSP en Vercel/HTTPS)
+  function dataURLtoBlob(dataUrl){
+    const parts=dataUrl.split(',');
+    const mime=parts[0].match(/:(.*?);/)[1];
+    const raw=atob(parts[1]);
+    const arr=new Uint8Array(raw.length);
+    for(let i=0;i<raw.length;i++)arr[i]=raw.charCodeAt(i);
+    return new Blob([arr],{type:mime});
+  }
+
+  // ── Compartir fotos solas (sin texto/caption) ──
   async function shareFilesOnly(fotosArr){
     const files=[];
     for(const foto of fotosArr){
-      const res=await fetch(foto.data);const blob=await res.blob();
+      const blob=dataURLtoBlob(foto.data);
       files.push(new File([blob],foto.fname,{type:'image/jpeg'}));
     }
     if(!files.length)return false;
     const can=navigator.canShare&&navigator.canShare({files});
     if(!can)return false;
-    await navigator.share({files}); // SIN text — fotos solas
+    await navigator.share({files}); // SIN text — fotos solas, sin caption
     return true;
   }
 
