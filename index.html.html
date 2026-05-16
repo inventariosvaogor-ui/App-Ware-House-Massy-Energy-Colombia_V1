@@ -2806,6 +2806,7 @@ function reWM(){const p=fPhotos.filter(Boolean).length;if(!p)return;let d=0;fPho
 /* ══════════════ SEND — WEB SHARE API ══════════════ */
 function limpiarRegistros(){
   registrosAcumulados=[];
+  window._pendingDrivePhotos=[];
   fVals={};fPhotos=new Array(6).fill(null);fWM=new Array(6).fill(null);fCap='';
   renderTab();toast('🧹 Módulo limpiado — listo para nuevos registros');
 }
@@ -2994,17 +2995,24 @@ async function doSend(){
 function finishSend(m,pc,vals){
   stats.reports=(stats.reports||0)+1;stats.photos=(stats.photos||0)+pc;saveStats();
   if(gcfg.autoExcel)setTimeout(exportXls,1200);
-  // Drive sube simultáneamente — no bloquea el flujo de WhatsApp
-  if(driveScriptUrl&&pc>0) driveUploadFormPhotos(m,vals);
-  // Limpiar TODO: campos, fotos, registros acumulados — módulo listo para registro nuevo
+  // NO subir a Drive aquí — el usuario exporta manualmente con el botón "📤 Exportar a Drive"
+  // Limpiar campos y registros acumulados PERO conservar fotos para exportar al Drive
   setTimeout(()=>{
+    // Conservar fotos y WM para el botón de Drive
+    const keepPhotos=[...fPhotos];
+    const keepWM=[...fWM];
+    // También conservar fotosData de los registros para el botón de Drive
+    // (se guardan en pendingDrivePhotos)
+    window._pendingDrivePhotos=(window._pendingDrivePhotos||[]).concat(
+      registrosAcumulados.flatMap(r=>r.fotosData||[])
+    );
     registrosAcumulados=[];
     fVals={__mid:m.id};fCap='';
-    fPhotos=new Array(6).fill(null);fWM=new Array(6).fill(null);
+    fPhotos=keepPhotos;fWM=keepWM;
     renderTab();
     if(q('#stR'))q('#stR').textContent=stats.reports||0;
     if(q('#stP'))q('#stP').textContent=stats.photos||0;
-    toast('✅ Enviado — módulo listo para nuevo registro');
+    toast('✅ Enviado — fotos conservadas para exportar al Drive');
   },600);
 }
 
@@ -3018,10 +3026,11 @@ function doPost(e){
   try{
     var p=JSON.parse(e.postData.contents);
     var modulo=p.modulo||'General';
+    var usuario=p.usuario||'Sin_usuario';
     var fecha=p.fecha||(function(){
       return Utilities.formatDate(new Date(),Session.getScriptTimeZone(),'yyyy-MM-dd');
     })();
-    var carpeta=getCarpeta(modulo,fecha);
+    var carpeta=getCarpeta(modulo,fecha,usuario);
     var bytes=Utilities.base64Decode(p.foto);
     var blob=Utilities.newBlob(bytes,p.tipo||'image/jpeg',p.nombre||('foto_'+new Date().getTime()+'.jpg'));
     carpeta.createFile(blob);
@@ -3033,7 +3042,7 @@ function doPost(e){
 
 function doGet(){return ok({status:'AlmacenApp Drive OK'});}
 
-function getCarpeta(modulo,fecha){
+function getCarpeta(modulo,fecha,usuario){
   var lock=LockService.getScriptLock();
   lock.waitLock(20000);
   try{
@@ -3041,7 +3050,8 @@ function getCarpeta(modulo,fecha){
     var app=unico(root,APP_FOLDER);
     var mod=unico(app,modulo);
     var day=unico(mod,fecha);
-    return day;
+    var usr=unico(day,usuario);
+    return usr;
   }finally{
     lock.releaseLock();
   }
@@ -3052,7 +3062,6 @@ function unico(padre,nombre){
   if(lista.hasNext()){
     var f=lista.next();
     if(lista.hasNext()){
-      // Si hay duplicados, mover archivos al primero y eliminar los extras
       while(lista.hasNext()){
         var dup=lista.next();
         var arch=dup.getFiles();
@@ -3129,23 +3138,19 @@ async function _driveUpload(dataUrl,fname,modName){
   if(!driveScriptUrl)return false;
   try{
     const base64=dataUrl.split(',')[1];if(!base64)return false;
-    // Fecha del dispositivo para subcarpeta (yyyy-MM-dd)
     const d=new Date();
     const fecha=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+    const usuario=(curUser?.name||'Sin_usuario').replace(/[^\w\s-]/g,'').trim()||'Sin_usuario';
     const resp=await fetch(driveScriptUrl,{
-      method:'POST',
-      mode:'cors',
-      body:JSON.stringify({foto:base64,nombre:fname,modulo:modName,tipo:'image/jpeg',fecha:fecha}),
+      method:'POST',mode:'cors',
+      body:JSON.stringify({foto:base64,nombre:fname,modulo:modName,tipo:'image/jpeg',fecha,usuario}),
       headers:{'Content-Type':'text/plain'}
     });
-    if(!resp.ok){console.warn('Drive error HTTP:',resp.status);return false;}
+    if(!resp.ok){console.warn('Drive HTTP error:',resp.status);return false;}
     const data=await resp.json().catch(()=>({}));
-    if(data.ok===false){console.warn('Drive script error:',data.e);return false;}
+    if(data.ok===false){console.warn('Drive script error:',data.error);return false;}
     return true;
-  }catch(e){
-    console.warn('Drive upload error:',e.message);
-    return false;
-  }
+  }catch(e){console.warn('Drive upload error:',e.message);return false;}
 }
 
 async function _driveUploadBatch(tasks,modName){
@@ -3162,17 +3167,32 @@ async function _driveUploadBatch(tasks,modName){
 
 async function exportarFotosDrive(){
   if(!driveScriptUrl){toast('⚠️ Configura el script de Drive en ⚙️ primero');return;}
-  saveFVals();const m=activeMod;if(!m)return;
-  const snap=Object.assign({},fVals);
-  const src=m.watermark!==false?fWM:fPhotos;
-  const tasks=src.map((p,i)=>p?_driveUpload(p,buildFileName(m,i,null,snap).split('/').pop(),m.name):null).filter(Boolean);
+  const m=activeMod;if(!m)return;
+  saveFVals();
+  const tasks=[];
+
+  // Primero usar las fotos pendientes de registros ya enviados por WA
+  const pending=window._pendingDrivePhotos||[];
+  pending.forEach(foto=>tasks.push(_driveUpload(foto.data,foto.fname,m.name)));
+
+  // Si no hay pendientes, usar fWM actual (fotos del formulario actual)
+  if(!tasks.length){
+    const snap=Object.assign({},fVals);
+    const src=m.watermark!==false?fWM:fPhotos;
+    src.forEach((p,i)=>{
+      if(p) tasks.push(_driveUpload(p,buildFileName(m,i,null,snap).split('/').pop(),m.name));
+    });
+  }
+
   if(!tasks.length){toast('⚠️ No hay fotos para exportar');return;}
   await _driveUploadBatch(tasks,m.name);
-  // Limpiar módulo después de exportar
+
+  // Limpiar TODO después de exportar al Drive
+  window._pendingDrivePhotos=[];
   registrosAcumulados=[];
   fVals={__mid:m.id};fCap='';
   fPhotos=new Array(6).fill(null);fWM=new Array(6).fill(null);
-  renderTab();toast('✅ Fotos exportadas a Drive — módulo limpio');
+  renderTab();toast('✅ Fotos exportadas al Drive — módulo limpio');
 }
 
 async function exportarFotosDriveDisp(){
