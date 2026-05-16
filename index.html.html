@@ -566,8 +566,14 @@ input[type=file]{display:none}
     <div class="b-tag">REPORTES · WHATSAPP · EXCEL · SINCRONIZACIÓN</div>
     <div class="stats">
       <div class="sc"><div class="sv" id="stM">0</div><div class="sl">Módulos</div></div>
-      <div class="sc"><div class="sv" id="stR">0</div><div class="sl">Reportes</div></div>
-      <div class="sc"><div class="sv" id="stP">0</div><div class="sl">Fotos</div></div>
+      <div class="sc" onclick="resetStats()" style="cursor:pointer;position:relative" title="Toca para reiniciar contadores">
+        <div class="sv" id="stR">0</div><div class="sl">Reportes</div>
+        <div style="position:absolute;top:4px;right:6px;font-size:9px;color:rgba(255,255,255,.35)">↺</div>
+      </div>
+      <div class="sc" onclick="resetStats()" style="cursor:pointer;position:relative" title="Toca para reiniciar contadores">
+        <div class="sv" id="stP">0</div><div class="sl">Fotos</div>
+        <div style="position:absolute;top:4px;right:6px;font-size:9px;color:rgba(255,255,255,.35)">↺</div>
+      </div>
     </div>
   </div>
   <div class="sess-bar">
@@ -991,7 +997,7 @@ const PRESET_MODS=[
 ];
 
 /* ══════════════ STATE ══════════════ */
-let modules=[], users=[], gcfg={folder:'Reportes_Almacen',onedrive:'',autoExcel:false,watermark:true,appName:'',appLogo:''}, stats={reports:0,photos:0};
+let modules=[], users=[], gcfg={folder:'Reportes_Almacen',onedrive:'',autoExcel:false,watermark:true,appName:'',appLogo:''}, stats={reports:0,photos:0,dia:''};
 let curUser=null, editMod=null, editModId=null, activeMod=null;
 let fVals={}, fPhotos=new Array(6).fill(null), fWM=new Array(6).fill(null), fCap=''; let dispGalSlot=null;
 let aTab=0, aSlot=null, selLoginUser=null, pinBuf='';
@@ -1018,6 +1024,7 @@ function load(){
   try{users=JSON.parse(LS.get('alm_users')||'[]');}catch(e){users=[];}
   try{Object.assign(gcfg,JSON.parse(LS.get('alm_gcfg')||'{}'));}catch(e){}
   try{Object.assign(stats,JSON.parse(LS.get('alm_stats')||'{}'));}catch(e){}
+  checkDayReset();
 }
 function saveMods(){LS.set('alm_mods',JSON.stringify(modules));markSync();}
 function saveUsers(){LS.set('alm_users',JSON.stringify(users));markSync();}
@@ -1030,6 +1037,24 @@ function saveGCfg(){
   LS.set('alm_gcfg',JSON.stringify(gcfg));markSync();
 }
 function saveStats(){LS.set('alm_stats',JSON.stringify(stats));}
+
+function checkDayReset(){
+  const hoy=new Date().toISOString().slice(0,10);
+  if(stats.dia && stats.dia!==hoy){
+    stats={reports:0,photos:0,dia:hoy};
+    saveStats();
+  } else if(!stats.dia){
+    stats.dia=hoy;saveStats();
+  }
+}
+
+function resetStats(){
+  if(!confirm('¿Reiniciar contadores de reportes y fotos?\n\nNO borra módulos ni configuración.'))return;
+  stats={reports:0,photos:0,dia:new Date().toISOString().slice(0,10)};
+  saveStats();
+  q('#stR').textContent='0';q('#stP').textContent='0';
+  toast('✅ Contadores reiniciados');
+}
 function markSync(){pendingSync=true;const b=q('#syncBar');if(b&&curUser?.role==='admin')b.classList.remove('hide');}
 
 /* ══════════════ SYNC ══════════════════════════════════════════════
@@ -1517,7 +1542,9 @@ function logout(){
 /* ══════════════ HOME ══════════════ */
 function renderHome(){
   const isA=curUser?.role==='admin';
-  q('#stM').textContent=modules.length;q('#stR').textContent=stats.reports||0;q('#stP').textContent=stats.photos||0;
+  q('#stM').textContent=modules.length;
+  checkDayReset();
+  q('#stR').textContent=stats.reports||0;q('#stP').textContent=stats.photos||0;
   q('#sAv').style.background=curUser?.color||COLORS[0];q('#sAv').textContent=curUser?.name?.charAt(0)?.toUpperCase()||'U';
   q('#sNm').textContent=curUser?.name||'';
   const rb=q('#sRl');rb.textContent=isA?'👑 Admin':'👤 Usuario';rb.className='badge '+(isA?'ba':'bu');
@@ -2505,20 +2532,17 @@ async function doDispSend(){
 function finishDispSend(m,pc){
   stats.reports=(stats.reports||0)+1;stats.photos=(stats.photos||0)+pc;saveStats();
   if(gcfg.autoExcel)setTimeout(exportDispXls,1200);
-  if(driveScriptUrl&&pc>0)driveUploadDispPhotos(m);
-  // Conservar fotos y Excel — limpiar solo campos — prepoblar desde último ítem
-  const lastVals=dispItems.length>0?Object.assign({},dispItems[dispItems.length-1].vals):{};
+  // Drive sube simultáneamente con WhatsApp
+  if(driveScriptUrl&&pc>0) driveUploadDispPhotos(m);
+  // Limpiar TODO: campos, fotos, ítems — módulo listo para nuevo registro
   setTimeout(()=>{
-    dispItems.forEach(it=>{it.vals={};});
-    if(dispItems.length>0){
-      getDispItemFields(m).forEach(f=>{
-        if(f.type!=='codmat'&&lastVals[f.id])dispItems[dispItems.length-1].vals[f.id]=lastVals[f.id];
-      });
-    }
+    initDispItems(m);
     dispHeaderVals={};
     getDispHeaderFields(m).forEach(f=>{if(f.type==='date')dispHeaderVals[f.id]=new Date().toISOString().slice(0,10);});
     fCap='';renderTab();
-    toast('✅ Enviado. Campos limpios — fotos y Excel conservados.');
+    if(q('#stR'))q('#stR').textContent=stats.reports||0;
+    if(q('#stP'))q('#stP').textContent=stats.photos||0;
+    toast('✅ Enviado — módulo listo para nuevo registro');
   },600);
 }
 
@@ -2719,7 +2743,14 @@ function getVals(){
 
 function applyWM(idx,cb){
   const m=activeMod;if(!fPhotos[idx]||!m||m.watermark===false){if(cb)cb();return;}
-  const vals=getVals();
+  // Guardar valores DOM primero si están disponibles (tab 0 activo)
+  saveFVals();
+  // Construir vals desde fVals (funciona en cualquier tab)
+  const vals={};
+  m.fields.forEach(f=>{
+    const v=(fVals[f.id]||'').trim();
+    if(v) vals[f.label]=v;
+  });
   const img=new Image();
   img.onload=()=>{
     const cv=q('#wm');const W=img.width,H=img.height;cv.width=W;cv.height=H;
@@ -2779,7 +2810,7 @@ function limpiarRegistros(){
   renderTab();toast('🧹 Módulo limpiado — listo para nuevos registros');
 }
 
-function handleSend(){
+async function handleSend(){
   if(isDispMod(activeMod)){handleDispSend();return;}
   saveFVals();const m=activeMod;if(!m)return;
   for(const f of m.fields){
@@ -2787,11 +2818,26 @@ function handleSend(){
     if(!val){if(aTab!==0){swTab(0);setTimeout(()=>hlFld(f),250);}else hlFld(f);toast(`⚠️ Completa: ${f.label}`);return;}
   }
   if(!m.waLink){toast('⚙️ Configura el link de WhatsApp en ✏️');return;}
-  const pc=fPhotos.filter(Boolean).length;
+
+  // ── Forzar marca de agua fresca con valores actuales ANTES de tomar snapshot ──
+  const photosCount=fPhotos.filter(Boolean).length;
+  if(photosCount>0 && m.watermark!==false){
+    await new Promise(resolve=>{
+      let done=0,total=photosCount;
+      fPhotos.forEach((p,i)=>{
+        if(!p)return;
+        applyWM(i,()=>{if(++done>=total)resolve();});
+      });
+      setTimeout(resolve,3000); // fallback por si algo falla
+    });
+  }
+
+  const pc=photosCount;
   const vals=getVals();
-  // Acumular registro actual CON sus fotos
+  // Snapshot de fotos CON marca de agua fresca — usar fVals (IDs) para nombres de archivo
   const src0=m.watermark!==false?fWM:fPhotos;
-  const fotosSnap=src0.map((p,i)=>p?{data:p,fname:buildFileName(m,i,null,vals).split('/').pop()}:null).filter(Boolean);
+  const fvSnap=Object.assign({},fVals); // copia con IDs como keys para buildFileName
+  const fotosSnap=src0.map((p,i)=>p?{data:p,fname:buildFileName(m,i,null,fvSnap).split('/').pop()}:null).filter(Boolean);
   registrosAcumulados.push({vals:Object.assign({},vals),fotos:fotosSnap.length,fotosData:fotosSnap});
   // ── Formato de mensaje igual al V2 ──
   const n=registrosAcumulados.length;
@@ -2948,13 +2994,17 @@ async function doSend(){
 function finishSend(m,pc,vals){
   stats.reports=(stats.reports||0)+1;stats.photos=(stats.photos||0)+pc;saveStats();
   if(gcfg.autoExcel)setTimeout(exportXls,1200);
-  if(driveScriptUrl&&pc>0)driveUploadFormPhotos(m,vals);
-  // Limpiar TODO al enviar — campos, fotos y registros acumulados
+  // Drive sube simultáneamente — no bloquea el flujo de WhatsApp
+  if(driveScriptUrl&&pc>0) driveUploadFormPhotos(m,vals);
+  // Limpiar TODO: campos, fotos, registros acumulados — módulo listo para registro nuevo
   setTimeout(()=>{
+    registrosAcumulados=[];
     fVals={__mid:m.id};fCap='';
     fPhotos=new Array(6).fill(null);fWM=new Array(6).fill(null);
     renderTab();
-    toast('✅ Módulo limpio — listo para un nuevo registro');
+    if(q('#stR'))q('#stR').textContent=stats.reports||0;
+    if(q('#stP'))q('#stP').textContent=stats.photos||0;
+    toast('✅ Enviado — módulo listo para nuevo registro');
   },600);
 }
 
@@ -3113,10 +3163,16 @@ async function _driveUploadBatch(tasks,modName){
 async function exportarFotosDrive(){
   if(!driveScriptUrl){toast('⚠️ Configura el script de Drive en ⚙️ primero');return;}
   saveFVals();const m=activeMod;if(!m)return;
-  const vals=getVals();const src=m.watermark!==false?fWM:fPhotos;
-  const tasks=src.map((p,i)=>p?_driveUpload(p,buildFileName(m,i,null,vals).split('/').pop(),m.name):null).filter(Boolean);
+  const snap=Object.assign({},fVals);
+  const src=m.watermark!==false?fWM:fPhotos;
+  const tasks=src.map((p,i)=>p?_driveUpload(p,buildFileName(m,i,null,snap).split('/').pop(),m.name):null).filter(Boolean);
   if(!tasks.length){toast('⚠️ No hay fotos para exportar');return;}
   await _driveUploadBatch(tasks,m.name);
+  // Limpiar módulo después de exportar
+  registrosAcumulados=[];
+  fVals={__mid:m.id};fCap='';
+  fPhotos=new Array(6).fill(null);fWM=new Array(6).fill(null);
+  renderTab();toast('✅ Fotos exportadas a Drive — módulo limpio');
 }
 
 async function exportarFotosDriveDisp(){
@@ -3127,19 +3183,35 @@ async function exportarFotosDriveDisp(){
     (it.photos||[]).forEach((p,pi)=>{
       if(!p)return;
       const show=(m.watermark!==false&&(it.watermarks||[])[pi])?it.watermarks[pi]:p;
-      tasks.push(_driveUpload(show,buildFileName(m,pi,ii,Object.assign({},dispHeaderVals||{},it.vals||{})).split('/').pop(),m.name));
+      const snap=Object.assign({},dispHeaderVals||{},it.vals||{});
+      tasks.push(_driveUpload(show,buildFileName(m,pi,ii,snap).split('/').pop(),m.name));
     });
   });
   if(!tasks.length){toast('⚠️ No hay fotos para exportar');return;}
   await _driveUploadBatch(tasks,m.name);
+  // Limpiar despacho después de exportar
+  initDispItems(m);dispHeaderVals={};fCap='';renderTab();
+  toast('✅ Fotos exportadas a Drive — módulo limpio');
 }
 
 async function driveUploadFormPhotos(m,vals){
-  const src=m.watermark!==false?fWM:fPhotos;
-  // buildFileName necesita vals con IDs como keys — usar fVals
-  const snap=Object.assign({},fVals);
-  const tasks=src.map((p,i)=>p?_driveUpload(p,buildFileName(m,i,null,snap).split('/').pop(),m.name):null).filter(Boolean);
-  if(tasks.length)await _driveUploadBatch(tasks,m.name);
+  const tasks=[];
+  // Usar fotos de los registros acumulados — ya tienen WM correcta aplicada
+  if(registrosAcumulados.length>0){
+    registrosAcumulados.forEach(reg=>{
+      (reg.fotosData||[]).forEach(foto=>{
+        tasks.push(_driveUpload(foto.data,foto.fname,m.name));
+      });
+    });
+  } else {
+    // Fallback: usar fWM actual
+    const src=m.watermark!==false?fWM:fPhotos;
+    const snap=Object.assign({},fVals);
+    src.forEach((p,i)=>{
+      if(p) tasks.push(_driveUpload(p,buildFileName(m,i,null,snap).split('/').pop(),m.name));
+    });
+  }
+  if(tasks.length) await _driveUploadBatch(tasks,m.name);
 }
 
 async function driveUploadDispPhotos(m){
