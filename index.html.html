@@ -2939,7 +2939,7 @@ async function doSend(){
         toast('✅ Fotos enviadas — enviando mensaje...');
         await new Promise(r=>setTimeout(r,1200));
         enviarTextoWA(msg);
-        finishSend(m,totalFotos,vals);registrosAcumulados=[];return;
+        finishSend(m,totalFotos,vals);return;
       }catch(err){
         if(err.name==='AbortError'){toast('Compartir cancelado');return;}
       }
@@ -2968,19 +2968,19 @@ async function doSend(){
           if(err.name==='AbortError'){toast(`Registro ${i+1} cancelado`);break;}
         }
       }
-      if(enviados>0){finishSend(m,enviados,vals);registrosAcumulados=[];return;}
+      if(enviados>0){finishSend(m,enviados,vals);return;}
     }
   }
 
   // ── BACKUP: sin fotos — solo texto ──
   if(totalFotos===0){
     if(navigator.share){
-      try{await navigator.share({text:msg});toast('✅ Mensaje compartido');finishSend(m,0,vals);registrosAcumulados=[];return;}
+      try{await navigator.share({text:msg});toast('✅ Mensaje compartido');finishSend(m,0,vals);return;}
       catch(err){if(err.name==='AbortError'){toast('Compartir cancelado');return;}}
     }
     enviarTextoWA(msg);
     toast('📋 Abriendo WhatsApp con el mensaje...');
-    finishSend(m,0,vals);registrosAcumulados=[];return;
+    finishSend(m,0,vals);return;
   }
 
   // ── FALLBACK: descargar fotos + abrir WA con texto ──
@@ -2989,30 +2989,29 @@ async function doSend(){
   });
   setTimeout(()=>enviarTextoWA(msg),totalFotos>0?800:100);
   toast(totalFotos>0?`⬇️ ${totalFotos} foto(s) descargadas · Abriendo WhatsApp...`:'📋 Mensaje copiado · Abriendo WhatsApp...');
-  finishSend(m,totalFotos,vals);registrosAcumulados=[];
+  finishSend(m,totalFotos,vals);
 }
 
 function finishSend(m,pc,vals){
   stats.reports=(stats.reports||0)+1;stats.photos=(stats.photos||0)+pc;saveStats();
   if(gcfg.autoExcel)setTimeout(exportXls,1200);
-  // NO subir a Drive aquí — el usuario exporta manualmente con el botón "📤 Exportar a Drive"
-  // Limpiar campos y registros acumulados PERO conservar fotos para exportar al Drive
+
+  // Guardar fotos de TODOS los registros acumulados para exportar al Drive después
+  window._pendingDrivePhotos=(window._pendingDrivePhotos||[]).concat(
+    registrosAcumulados.flatMap(r=>r.fotosData||[])
+  );
+
+  // Resetear acumulador de registros
+  registrosAcumulados=[];
+
+  // Limpiar SOLO campos — las fotos quedan visibles para exportar al Drive
   setTimeout(()=>{
-    // Conservar fotos y WM para el botón de Drive
-    const keepPhotos=[...fPhotos];
-    const keepWM=[...fWM];
-    // También conservar fotosData de los registros para el botón de Drive
-    // (se guardan en pendingDrivePhotos)
-    window._pendingDrivePhotos=(window._pendingDrivePhotos||[]).concat(
-      registrosAcumulados.flatMap(r=>r.fotosData||[])
-    );
-    registrosAcumulados=[];
     fVals={__mid:m.id};fCap='';
-    fPhotos=keepPhotos;fWM=keepWM;
+    // NO tocar fPhotos ni fWM — quedan para el botón "📤 Exportar a Drive"
     renderTab();
     if(q('#stR'))q('#stR').textContent=stats.reports||0;
     if(q('#stP'))q('#stP').textContent=stats.photos||0;
-    toast('✅ Enviado — fotos conservadas para exportar al Drive');
+    toast('✅ Campos limpios — fotos guardadas para exportar al Drive');
   },600);
 }
 
@@ -3171,28 +3170,28 @@ async function exportarFotosDrive(){
   saveFVals();
   const tasks=[];
 
-  // Primero usar las fotos pendientes de registros ya enviados por WA
-  const pending=window._pendingDrivePhotos||[];
-  pending.forEach(foto=>tasks.push(_driveUpload(foto.data,foto.fname,m.name)));
+  // 1. Fotos de registros ya enviados por WhatsApp (con WM correcta)
+  (window._pendingDrivePhotos||[]).forEach(foto=>{
+    tasks.push(_driveUpload(foto.data,foto.fname,m.name));
+  });
 
-  // Si no hay pendientes, usar fWM actual (fotos del formulario actual)
-  if(!tasks.length){
-    const snap=Object.assign({},fVals);
-    const src=m.watermark!==false?fWM:fPhotos;
-    src.forEach((p,i)=>{
-      if(p) tasks.push(_driveUpload(p,buildFileName(m,i,null,snap).split('/').pop(),m.name));
-    });
-  }
+  // 2. Fotos del registro actual en pantalla (si quedan)
+  const snap=Object.assign({},fVals);
+  const src=m.watermark!==false?fWM:fPhotos;
+  src.forEach((p,i)=>{
+    if(p) tasks.push(_driveUpload(p,buildFileName(m,i,null,snap).split('/').pop(),m.name));
+  });
 
   if(!tasks.length){toast('⚠️ No hay fotos para exportar');return;}
   await _driveUploadBatch(tasks,m.name);
 
-  // Limpiar TODO después de exportar al Drive
+  // Limpiar TODO después de exportar
   window._pendingDrivePhotos=[];
   registrosAcumulados=[];
   fVals={__mid:m.id};fCap='';
   fPhotos=new Array(6).fill(null);fWM=new Array(6).fill(null);
-  renderTab();toast('✅ Fotos exportadas al Drive — módulo limpio');
+  renderTab();
+  toast('✅ Fotos exportadas al Drive — módulo limpio para nueva jornada');
 }
 
 async function exportarFotosDriveDisp(){
